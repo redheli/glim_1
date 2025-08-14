@@ -69,9 +69,9 @@
       // "libimu_validator.so"
     ],
     // Topics
-    "imu_topic": "/imu_correct",
+    "imu_topic": "/livox/imu",
     "points_topic": "/livox/pc2",
-    "image_topic": "/camera/color/image_raw",
+    "image_topic": "/left_camera/image",
     // QoS options
     "imu_qos": {
       "profile": "sensor_data",
