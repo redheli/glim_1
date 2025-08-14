@@ -192,16 +192,16 @@ endif()
 #############
 ## Install ##
 #############
-
+message(STATUS "ENV{ROS_VERSION=====================================}: $ENV{ROS_VERSION}")
 if(DEFINED ENV{ROS_VERSION})
-  if($ENV{ROS_VERSION} EQUAL 1)
+  if("$ENV{ROS_VERSION}" STREQUAL "1" OR "$ENV{ROS_VERSION}" STREQUAL "ROS1")
     # No idea
     set(CMAKE_INSTALL_INCLUDEDIR "include/glim")
     set(CMAKE_INSTALL_LIBDIR "lib")
     set(CMAKE_INSTALL_BINDIR "bin/glim")
     set(CMAKE_INSTALL_DATADIR "share/glim")
     set(CMAKE_CONFIG_INSTALL_DIR "share/glim")
-  elseif($ENV{ROS_VERSION} EQUAL 2)
+  elseif("$ENV{ROS_VERSION}" STREQUAL "2" OR "$ENV{ROS_VERSION}" STREQUAL "ROS2")
     set(CMAKE_INSTALL_INCLUDEDIR "include/glim")
     set(CMAKE_INSTALL_LIBDIR "lib")
     set(CMAKE_INSTALL_BINDIR "bin/glim")
@@ -251,7 +251,7 @@ install(FILES
 ## ROS-related ##
 #################
 if(DEFINED ENV{ROS_VERSION})
-  if($ENV{ROS_VERSION} EQUAL 2)
+  if("$ENV{ROS_VERSION}" STREQUAL "2" OR "$ENV{ROS_VERSION}" STREQUAL "ROS2")
     # ROS2
     find_package(ament_cmake REQUIRED)
     install(DIRECTORY config DESTINATION share/glim)
@@ -259,7 +259,7 @@ if(DEFINED ENV{ROS_VERSION})
     ament_export_libraries(${glim_LIBRARIES} ${GTSAM_LIBRARIES} fmt spdlog::spdlog)
     ament_export_targets(glim-targets HAS_LIBRARY_TARGET)
     ament_package(CONFIG_EXTRAS "cmake/glim-config.cmake.in")
-  elseif($ENV{ROS_VERSION} EQUAL 1)
+  elseif("$ENV{ROS_VERSION}" STREQUAL "1" OR "$ENV{ROS_VERSION}" STREQUAL "ROS1")
     # ROS1
     find_package(catkin REQUIRED)
     catkin_package(
