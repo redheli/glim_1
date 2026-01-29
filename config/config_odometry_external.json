@@ -1,0 +1,32 @@
+{
+  /*** External Odometry Estimation (e.g., from FAST-LIVO2) ***
+  // This module uses pre-computed poses from an external source instead of
+  // running GLIM's internal odometry estimation.
+  //
+  // pose_file_path        : Path to the external pose file (FAST-LIVO2 pose.txt format)
+  //                         Format: tx ty tz qw qx qy qz lidar_ts img_ts
+  // timestamp_tolerance   : Maximum time difference for pose matching (seconds)
+  // estimate_velocity     : Estimate velocity from pose differences
+  // velocity_dt           : Time delta for velocity estimation (seconds)
+  //
+  // Usage:
+  // 1. Run FAST-LIVO2 offline on your rosbag to generate pose.txt
+  // 2. Set pose_file_path to the generated pose.txt
+  // 3. Run GLIM with this config to use external odometry for mapping
+  */
+  "odometry_estimation": {
+    "so_name": "libexternal_odometry_estimation.so",
+
+    // Path to external pose file (FAST-LIVO2 format)
+    // Set this to your pose.txt path before running
+    "pose_file_path": "",
+
+    // Timestamp synchronization tolerance (seconds)
+    // Poses within this tolerance will be matched to frames
+    "timestamp_tolerance": 0.1,
+
+    // Velocity estimation settings
+    "estimate_velocity": true,
+    "velocity_dt": 0.02
+  }
+}
