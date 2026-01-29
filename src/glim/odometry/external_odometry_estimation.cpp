@@ -5,6 +5,7 @@
 #include <gtsam_points/types/point_cloud_cpu.hpp>
 
 #include <glim/util/config.hpp>
+#include <glim/common/cloud_deskewing.hpp>
 #include <glim/odometry/callbacks.hpp>
 
 namespace glim {
@@ -54,10 +55,14 @@ ExternalOdometryEstimation::ExternalOdometryEstimation(const ExternalOdometryEst
     load_poses(params_->pose_file_path);
   }
 
+  // Create deskewing module
+  deskewing_ = std::make_unique<CloudDeskewing>();
+
   spdlog::info("ExternalOdometryEstimation initialized");
   spdlog::info("  pose_file_path: {}", params_->pose_file_path);
   spdlog::info("  timestamp_tolerance: {} sec", params_->timestamp_tolerance);
   spdlog::info("  estimate_velocity: {}", params_->estimate_velocity);
+  spdlog::info("  deskewing: enabled");
 }
 
 ExternalOdometryEstimation::~ExternalOdometryEstimation() {}
@@ -110,26 +115,23 @@ EstimationFrame::ConstPtr ExternalOdometryEstimation::insert_frame(
     return nullptr;
   }
 
-  // Handle time offset between frame timestamps and pose timestamps
+  // Use frame timestamps directly -- rosbag and pose.txt share the same time domain.
+  // FAST-LIVO2 skips initial frames during initialization, so early frames may
+  // fall before the pose range and will use the boundary pose.
   double query_stamp = frame->stamp;
+  double time_offset = 0.0;
 
   if (!first_frame_received_) {
     first_frame_received_ = true;
     first_frame_stamp_ = frame->stamp;
 
-    // Find the first pose timestamp to compute offset
     auto [min_pose_t, max_pose_t] = pose_interpolator_->time_range();
     first_pose_stamp_ = min_pose_t;
 
-    spdlog::info("First frame stamp: {:.6f}, First pose stamp: {:.6f}, Offset: {:.6f}",
-                 first_frame_stamp_, first_pose_stamp_,
-                 first_pose_stamp_ - first_frame_stamp_);
+    spdlog::info("First frame stamp: {:.6f}, First pose stamp: {:.6f}",
+                 first_frame_stamp_, first_pose_stamp_);
+    spdlog::info("Using direct timestamp matching (no offset)");
   }
-
-  // Apply time offset: convert frame timestamp to pose timestamp domain
-  // This handles the case where rosbag timestamps differ from pose.txt timestamps
-  double time_offset = first_pose_stamp_ - first_frame_stamp_;
-  query_stamp = frame->stamp + time_offset;
 
   // Check if timestamp is in range
   if (!pose_interpolator_->in_range(query_stamp)) {
@@ -166,8 +168,32 @@ EstimationFrame::ConstPtr ExternalOdometryEstimation::insert_frame(
   // Set frame_id to IMU so sub_mapping and global_mapping can use IMU-frame factors
   est_frame->frame_id = FrameID::IMU;
 
-  // Convert preprocessed frame points to gtsam_points::PointCloud
-  auto points = std::make_shared<gtsam_points::PointCloudCPU>(frame->points);
+  // Deskew point cloud using interpolated poses over the scan duration
+  std::vector<Eigen::Vector4d> deskewed_points;
+  if (!frame->times.empty() && frame->times.size() == frame->points.size()) {
+    // Generate a trajectory of poses covering the scan duration for deskewing
+    const double scan_duration = frame->scan_end_time - frame->stamp;
+    const int num_steps = 10;
+    std::vector<double> imu_times(num_steps + 1);
+    std::vector<Eigen::Isometry3d> imu_poses(num_steps + 1);
+
+    for (int i = 0; i <= num_steps; i++) {
+      double t = frame->stamp + scan_duration * i / num_steps;
+      double qt = t + time_offset;
+      imu_times[i] = scan_duration * i / num_steps;  // relative to scan start
+      // Pose at this time: T_world_imu
+      Eigen::Isometry3d T_world_lidar_t = pose_interpolator_->interpolate(qt);
+      imu_poses[i] = T_world_lidar_t * params_->T_lidar_imu;
+    }
+
+    Eigen::Isometry3d T_imu_lidar = params_->T_lidar_imu.inverse();
+    deskewed_points = deskewing_->deskew(T_imu_lidar, imu_times, imu_poses, 0.0, frame->times, frame->points);
+  } else {
+    deskewed_points = frame->points;
+  }
+
+  // Convert deskewed points to gtsam_points::PointCloud
+  auto points = std::make_shared<gtsam_points::PointCloudCPU>(deskewed_points);
   if (!frame->intensities.empty()) {
     points->add_intensities(frame->intensities);
   }

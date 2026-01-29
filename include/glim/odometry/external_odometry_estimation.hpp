@@ -11,6 +11,8 @@
 
 namespace glim {
 
+class CloudDeskewing;
+
 /**
  * @brief Parameters for external odometry estimation
  */
@@ -78,6 +80,7 @@ private:
   std::unique_ptr<ExternalOdometryEstimationParams> params_;
   std::unique_ptr<PoseFileLoader> pose_loader_;
   std::unique_ptr<PoseInterpolator> pose_interpolator_;
+  std::unique_ptr<CloudDeskewing> deskewing_;
 
   // Frame management
   int64_t frame_id_;
