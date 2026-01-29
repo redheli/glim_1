@@ -1,27 +1,141 @@
-# External Odometry Integration (FAST-LIVO2)
+# External Odometry Integration (FAST-LIVO2 + GLIM)
 
-This module allows GLIM to use pre-computed odometry from external sources (e.g., FAST-LIVO2) instead of running its internal LiDAR-IMU odometry estimation.
+Use pre-computed odometry from FAST-LIVO2 as input to GLIM's mapping pipeline (SubMapping + GlobalMapping with pose graph optimization and loop closure).
 
-## Overview
+## Design
 
 ```
-┌─────────────────────┐      ┌─────────────────────────────────────────────┐
-│    FAST-LIVO2       │      │                   GLIM                       │
-│    (Offline)        │      │                                              │
-│                     │      │  ┌─────────┐   ┌──────────┐   ┌───────────┐ │
-│  rosbag ──► pose.txt│ ─►   │  │External │──►│SubMapping│──►│ Global    │ │
-│            (9 cols) │      │  │Odometry │   │          │   │ Mapping   │ │
-│                     │      │  │Estimator│   │          │   │(PoseGraph)│ │
-└─────────────────────┘      │  └─────────┘   └──────────┘   └───────────┘ │
-                             └─────────────────────────────────────────────┘
+ FAST-LIVO2 (Offline)                      GLIM
+┌──────────────────────┐    ┌─────────────────────────────────────────┐
+│                      │    │                                         │
+│  rosbag ──► pose.txt │    │  ExternalOdometryEstimation             │
+│             (9 cols) │───►│    │  PoseFileLoader (parse pose.txt)   │
+│                      │    │    │  PoseInterpolator (SLERP + lerp)   │
+│                      │    │    │  CloudDeskewing (motion compensate) │
+└──────────────────────┘    │    ▼                                    │
+                            │  EstimationFrame                        │
+        rosbag ────────────►│    │                                    │
+     (point cloud + IMU)    │    ├──► SubMapping (local submaps)      │
+                            │    │                                    │
+                            │    └──► GlobalMapping (pose graph)      │
+                            │              │                          │
+                            │              ▼                          │
+                            │         Optimized Map                   │
+                            └─────────────────────────────────────────┘
 ```
 
-## Workflow
+### Module Architecture
 
-### Step 1: Run FAST-LIVO2 to Generate Odometry
+| Component | File | Purpose |
+|-----------|------|---------|
+| `PoseFileLoader` | `src/glim/util/pose_file_loader.cpp` | Parse FAST-LIVO2 pose.txt format |
+| `PoseInterpolator` | `src/glim/util/pose_interpolator.cpp` | SLERP rotation + linear translation interpolation with binary search |
+| `ExternalOdometryEstimation` | `src/glim/odometry/external_odometry_estimation.cpp` | OdometryEstimationBase plugin: timestamp matching, deskewing, EstimationFrame creation |
+
+### Key Design Decisions
+
+- **No timestamp offset**: rosbag and pose.txt share the same time domain. FAST-LIVO2 skips initial frames during initialization, so early frames before the first pose use the boundary pose.
+- **Pose-interpolated deskewing**: For each point cloud scan (~100ms), a mini-trajectory of 10 interpolated poses is generated and fed to GLIM's `CloudDeskewing` to motion-compensate every point. This is critical for Livox LiDARs with non-repetitive scan patterns.
+- **Dynamic loading**: Built as `libexternal_odometry_estimation.so`, loaded via `so_name` in config -- no changes to GLIM core code needed.
+
+## pose.txt Format
+
+FAST-LIVO2 outputs 9 columns, space-separated:
+
+```
+tx ty tz qw qx qy qz lidar_ts img_ts
+```
+
+| Column | Description |
+|--------|-------------|
+| 1-3 | `tx, ty, tz` -- position in meters (world frame) |
+| 4-7 | `qw, qx, qy, qz` -- quaternion, w-first |
+| 8 | `lidar_ts` -- LiDAR timestamp (Unix epoch seconds) |
+| 9 | `img_ts` -- image timestamp (Unix epoch seconds) |
+
+Example:
+```
+-0.000590 -0.004577 -0.001811 0.999858 0.007535 0.014983 0.001732 1735690391.808028 1735690391.908022
+```
+
+## Configuration
+
+Two config directories are involved:
+
+### 1. `config_external/config.json` -- point odometry to external module
+
+The key change is `config_odometry`:
+
+```json
+{
+  "global": {
+    "config_odometry": "config_odometry_external.json",
+    "config_sub_mapping": "config_sub_mapping_gpu.json",
+    "config_global_mapping": "config_global_mapping_gpu.json"
+  }
+}
+```
+
+### 2. `config_external/config_odometry_external.json` -- external odometry settings
+
+```json
+{
+  "odometry_estimation": {
+    "so_name": "libexternal_odometry_estimation.so",
+    "pose_file_path": "/data/koide3/data/pose.txt",
+    "timestamp_tolerance": 0.1,
+    "estimate_velocity": true,
+    "velocity_dt": 0.02
+  }
+}
+```
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `so_name` | Shared library name (do not change) | `libexternal_odometry_estimation.so` |
+| `pose_file_path` | Absolute path to FAST-LIVO2 pose.txt | `""` |
+| `timestamp_tolerance` | Max time diff for nearest-pose lookup (sec) | `0.1` |
+| `estimate_velocity` | Estimate velocity from pose finite differences | `true` |
+| `velocity_dt` | Time delta for velocity estimation (sec) | `0.02` |
+
+### 3. `config_external/config_ros.json` -- ROS topics
+
+Update topic names to match your rosbag:
+
+```json
+{
+  "glim_ros": {
+    "imu_topic": "/livox/imu",
+    "points_topic": "/livox/pc2",
+    "acc_scale": 9.80665
+  }
+}
+```
+
+Set `acc_scale` to `9.80665` for Livox sensors (raw IMU outputs in g units).
+
+### 4. `config_external/config_sensors.json` -- LiDAR-IMU extrinsics
+
+Set `T_lidar_imu` in TUM format `[x, y, z, qx, qy, qz, qw]`:
+
+```json
+{
+  "sensors": {
+    "T_lidar_imu": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+  }
+}
+```
+
+Common values:
+- Livox Mid360: `[0, 0, 0, 0, 0, 0, 1]` (identity)
+- Livox Avia: `[0.04165, 0.02326, -0.0284, 0, 0, 0, 1]`
+
+## How to Run
+
+### Step 1: Generate pose.txt with FAST-LIVO2
 
 ```bash
-# In singamap-dev Docker container
+# Start singamap-dev container
 docker run --rm -it --privileged --net=host --ipc=host --gpus all \
   -e NVIDIA_VISIBLE_DEVICES=all \
   -e NVIDIA_DRIVER_CAPABILITIES=all \
@@ -39,87 +153,90 @@ source /home/max/catkin_ws/devel/setup.bash
 roslaunch fast_livo mapping_offline.launch bag_file:=/path/to/your.bag
 ```
 
-This generates `pose.txt` in the output directory with format:
-```
-tx ty tz qw qx qy qz lidar_ts img_ts
-```
+Output: `<output_dir>/YYYYMMDD_HHMMSS_laserMapping/pose.txt`
 
-### Step 2: Build GLIM with External Odometry
+### Step 2: Build GLIM with external odometry module
 
 ```bash
-# Run GLIM Docker container
+# Start GLIM container
 docker run --rm -it --privileged --net=host --ipc=host --gpus all \
   -e NVIDIA_VISIBLE_DEVICES=all \
   -e NVIDIA_DRIVER_CAPABILITIES=all \
   -v /tmp/.X11-unix:/tmp/.X11-unix \
   -e DISPLAY=$DISPLAY \
-  -v /home/max/ground_map/koide3/glim:/glim \
+  -v $HOME/.Xauthority:/root/.Xauthority \
+  -e XAUTHORITY=/root/.Xauthority \
+  -v /home/max/ground_map/koide3/glim:/glim_src \
   -v /home/max/ground_map:/data \
-  --name glim-dev koide3/glim_ros2:humble_cuda12.2
+  --name glim-dev koide3/glim_ros2:humble_cuda12.2 /bin/bash
 
-# Inside container - build
-cd /glim
-colcon build --symlink-install
+# Inside container: copy new files into the pre-built workspace and rebuild
+cp /glim_src/include/glim/util/pose_file_loader.hpp /root/ros2_ws/src/glim/include/glim/util/
+cp /glim_src/include/glim/util/pose_interpolator.hpp /root/ros2_ws/src/glim/include/glim/util/
+cp /glim_src/include/glim/odometry/external_odometry_estimation.hpp /root/ros2_ws/src/glim/include/glim/odometry/
+cp /glim_src/src/glim/util/pose_file_loader.cpp /root/ros2_ws/src/glim/src/glim/util/
+cp /glim_src/src/glim/util/pose_interpolator.cpp /root/ros2_ws/src/glim/src/glim/util/
+cp /glim_src/src/glim/odometry/external_odometry_estimation.cpp /root/ros2_ws/src/glim/src/glim/odometry/
+cp /glim_src/src/glim/odometry/external_odometry_estimation_create.cpp /root/ros2_ws/src/glim/src/glim/odometry/
+cp /glim_src/config/config_odometry_external.json /root/ros2_ws/src/glim/config/
+cp /glim_src/CMakeLists.txt /root/ros2_ws/src/glim/CMakeLists.txt
+
+# Fix CMakeLists.txt for container's GLIM version (may not have viewer_ui files)
+sed -i '/standard_viewer_ui.cpp/d' /root/ros2_ws/src/glim/CMakeLists.txt
+sed -i '/standard_viewer_callbacks.cpp/d' /root/ros2_ws/src/glim/CMakeLists.txt
+
+source /opt/ros/humble/setup.bash
+cd /root/ros2_ws
+colcon build --packages-select glim --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
 ```
 
-### Step 3: Configure GLIM
+### Step 3: Update config
 
-Edit `config/config.json` to use external odometry:
+Edit `config_external/config_odometry_external.json` with your pose.txt path:
+
 ```json
-{
-  "global": {
-    "config_odometry": "config_odometry_external.json",
-    ...
-  }
-}
+"pose_file_path": "/data/koide3/data/pose.txt"
 ```
 
-Edit `config/config_odometry_external.json`:
+Edit `config_external/config_ros.json` with your rosbag topics:
+
 ```json
-{
-  "odometry_estimation": {
-    "so_name": "libexternal_odometry_estimation.so",
-    "pose_file_path": "/data/annotator/one_txt/20250811_121516_laserMapping/pose.txt",
-    "timestamp_tolerance": 0.1,
-    "estimate_velocity": true,
-    "velocity_dt": 0.02
-  }
-}
+"imu_topic": "/livox/imu",
+"points_topic": "/livox/pc2"
 ```
 
-### Step 4: Run GLIM Mapping
+### Step 4: Run GLIM mapping
 
 ```bash
-# Inside GLIM container
-source install/setup.bash
-ros2 launch glim_ros glim.launch.py
-# In another terminal, play the rosbag
-ros2 bag play /data/path/to/your_bag
+source /opt/ros/humble/setup.bash
+source /root/ros2_ws/install/setup.bash
+
+/root/ros2_ws/install/glim_ros/lib/glim_ros/glim_rosbag \
+  /data/rosbag/hdb_r_long_pc2_ros2 \
+  --ros-args \
+  -p config_path:=/glim_src/config_external \
+  -p auto_quit:=true \
+  -p dump_path:=/data/koide3/data/glim_dump
 ```
 
-## Configuration Options
+### Step 5: View results
 
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `pose_file_path` | Path to FAST-LIVO2 pose.txt | "" |
-| `timestamp_tolerance` | Max time diff for pose matching (sec) | 0.1 |
-| `estimate_velocity` | Estimate velocity from poses | true |
-| `velocity_dt` | Time delta for velocity estimation | 0.02 |
+```bash
+/root/ros2_ws/install/glim_ros/lib/glim_ros/offline_viewer \
+  /data/koide3/data/glim_dump
+```
 
-## pose.txt Format
+## Output
 
-FAST-LIVO2 outputs poses in this format (9 columns, space-separated):
+GLIM produces the following in the dump directory:
 
-| Column | Description |
-|--------|-------------|
-| 1-3 | tx, ty, tz (position in meters) |
-| 4-7 | qw, qx, qy, qz (quaternion, w-first) |
-| 8 | lidar_timestamp (Unix epoch seconds) |
-| 9 | image_timestamp (Unix epoch seconds) |
-
-## Notes
-
-- The external odometry module automatically handles timestamp offset between rosbag and pose.txt
-- Poses are interpolated using SLERP for rotation and linear interpolation for translation
-- Velocity is estimated using finite differences from interpolated poses
-- GLIM's SubMapping and GlobalMapping still perform loop closure and pose graph optimization
+| File | Description |
+|------|-------------|
+| `000000/` ... `NNNNNN/` | Submap data (point clouds + poses) |
+| `graph.bin` | Serialized factor graph (binary) |
+| `graph.txt` | Factor graph (text, for inspection) |
+| `odom_lidar.txt` | Odometry trajectory (LiDAR frame, TUM format) |
+| `odom_imu.txt` | Odometry trajectory (IMU frame, TUM format) |
+| `traj_lidar.txt` | Optimized trajectory (LiDAR frame, TUM format) |
+| `traj_imu.txt` | Optimized trajectory (IMU frame, TUM format) |
+| `values.bin` | Optimized graph values (binary) |
