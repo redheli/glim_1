@@ -158,7 +158,7 @@ Output: `<output_dir>/YYYYMMDD_HHMMSS_laserMapping/pose.txt`
 ### Step 2: Build GLIM with external odometry module
 
 ```bash
-# Start GLIM container
+# Start GLIM container -- mount local glim source directly into the workspace
 docker run --rm -it --privileged --net=host --ipc=host --gpus all \
   -e NVIDIA_VISIBLE_DEVICES=all \
   -e NVIDIA_DRIVER_CAPABILITIES=all \
@@ -166,25 +166,11 @@ docker run --rm -it --privileged --net=host --ipc=host --gpus all \
   -e DISPLAY=$DISPLAY \
   -v $HOME/.Xauthority:/root/.Xauthority \
   -e XAUTHORITY=/root/.Xauthority \
-  -v /home/max/ground_map/koide3/glim:/glim_src \
+  -v /home/max/ground_map/koide3/glim:/root/ros2_ws/src/glim \
   -v /home/max/ground_map:/data \
   --name glim-dev koide3/glim_ros2:humble_cuda12.2 /bin/bash
 
-# Inside container: copy new files into the pre-built workspace and rebuild
-cp /glim_src/include/glim/util/pose_file_loader.hpp /root/ros2_ws/src/glim/include/glim/util/
-cp /glim_src/include/glim/util/pose_interpolator.hpp /root/ros2_ws/src/glim/include/glim/util/
-cp /glim_src/include/glim/odometry/external_odometry_estimation.hpp /root/ros2_ws/src/glim/include/glim/odometry/
-cp /glim_src/src/glim/util/pose_file_loader.cpp /root/ros2_ws/src/glim/src/glim/util/
-cp /glim_src/src/glim/util/pose_interpolator.cpp /root/ros2_ws/src/glim/src/glim/util/
-cp /glim_src/src/glim/odometry/external_odometry_estimation.cpp /root/ros2_ws/src/glim/src/glim/odometry/
-cp /glim_src/src/glim/odometry/external_odometry_estimation_create.cpp /root/ros2_ws/src/glim/src/glim/odometry/
-cp /glim_src/config/config_odometry_external.json /root/ros2_ws/src/glim/config/
-cp /glim_src/CMakeLists.txt /root/ros2_ws/src/glim/CMakeLists.txt
-
-# Fix CMakeLists.txt for container's GLIM version (may not have viewer_ui files)
-sed -i '/standard_viewer_ui.cpp/d' /root/ros2_ws/src/glim/CMakeLists.txt
-sed -i '/standard_viewer_callbacks.cpp/d' /root/ros2_ws/src/glim/CMakeLists.txt
-
+# Inside container: build directly (no file copying needed)
 source /opt/ros/humble/setup.bash
 cd /root/ros2_ws
 colcon build --packages-select glim --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
@@ -214,7 +200,7 @@ source /root/ros2_ws/install/setup.bash
 /root/ros2_ws/install/glim_ros/lib/glim_ros/glim_rosbag \
   /data/rosbag/hdb_r_long_pc2_ros2 \
   --ros-args \
-  -p config_path:=/glim_src/config_external \
+  -p config_path:=/root/ros2_ws/src/glim/config_external \
   -p auto_quit:=true \
   -p dump_path:=/data/koide3/data/glim_dump
 ```
