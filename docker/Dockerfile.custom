@@ -1,0 +1,23 @@
+FROM koide3/glim_ros2:humble_cuda12.2
+
+# Install mesa-utils for OpenGL debugging
+RUN apt-get update && apt-get install -y \
+    mesa-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Source ROS2 Humble and ros2_ws setup in bashrc
+RUN echo "source /opt/ros/humble/setup.bash" >> /root/.bashrc && \
+    echo "cd ~/ros2_ws" >> /root/.bashrc && \
+    echo "source install/setup.bash" >> /root/.bashrc
+
+# Optional: Also source glim workspace if it exists
+RUN echo "if [ -f /glim/install/setup.bash ]; then source /glim/install/setup.bash; fi" >> /root/.bashrc
+
+# Set working directory
+WORKDIR /root/ros2_ws
+
+# Copy entrypoint script
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
