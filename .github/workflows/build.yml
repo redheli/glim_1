@@ -55,6 +55,8 @@ jobs:
 
   dispatch:
     needs: build
+    # Only run dispatch on the original repo (skip for forks)
+    if: github.repository == 'koide3/glim'
     strategy:
       matrix:
         repo: ['koide3/glim_ros2']
