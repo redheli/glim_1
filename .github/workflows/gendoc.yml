@@ -9,6 +9,8 @@ on:
 jobs:
   gendoc:
     name: Generate documentation
+    # Only run on the original repo (skip for forks)
+    if: github.repository == 'koide3/glim'
     runs-on: ubuntu-latest
 
     steps:
