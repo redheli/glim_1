@@ -132,6 +132,18 @@ Common values:
 
 ## How to Run
 
+Uses `scripts/run_glim_custom.sh` which builds the `glim_custom:humble_cuda12.2` Docker image
+and runs the container with GPU support.
+
+### Docker volume mounts (defined in run_glim_custom.sh)
+
+| Host path | Container path | Purpose |
+|-----------|---------------|---------|
+| `/home/max/ground_map/koide3/glim_1/` | `/root/ros2_ws/src/glim` | GLIM source (for building + config access) |
+| `/home/max/` | `/home_max/` | Access to rosbags, pose files, output dirs |
+
+All paths in config files must use **container paths** (e.g. `/home_max/...`).
+
 ### Step 1: Generate pose.txt with FAST-LIVO2
 
 ```bash
@@ -155,61 +167,122 @@ roslaunch fast_livo mapping_offline.launch bag_file:=/path/to/your.bag
 
 Output: `<output_dir>/YYYYMMDD_HHMMSS_laserMapping/pose.txt`
 
-### Step 2: Build GLIM with external odometry module
+### Step 2: Update config (MUST check for each new bag)
 
-```bash
-# Start GLIM container -- mount local glim source directly into the workspace
-docker run --rm -it --privileged --net=host --ipc=host --gpus all \
-  -e NVIDIA_VISIBLE_DEVICES=all \
-  -e NVIDIA_DRIVER_CAPABILITIES=all \
-  -v /tmp/.X11-unix:/tmp/.X11-unix \
-  -e DISPLAY=$DISPLAY \
-  -v $HOME/.Xauthority:/root/.Xauthority \
-  -e XAUTHORITY=/root/.Xauthority \
-  -v /home/max/ground_map/koide3/glim:/root/ros2_ws/src/glim \
-  -v /home/max/ground_map:/data \
-  --name glim-dev koide3/glim_ros2:humble_cuda12.2 /bin/bash
+Three parameters **must** be verified and updated before each run:
 
-# Inside container: build directly (no file copying needed)
-source /opt/ros/humble/setup.bash
-cd /root/ros2_ws
-colcon build --packages-select glim --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
-```
+#### 2a. `config_external/config_odometry_external.json` -- pose file path
 
-### Step 3: Update config
-
-Edit `config_external/config_odometry_external.json` with your pose.txt path:
+Set `pose_file_path` to the **container path** of your pose.txt file:
 
 ```json
-"pose_file_path": "/data/koide3/data/pose.txt"
+"pose_file_path": "/home_max/ground_map/rosbag/<your-bag-dir>/pose.txt"
 ```
 
-Edit `config_external/config_ros.json` with your rosbag topics:
+#### 2b. `config_external/config_ros.json` -- ROS topic names
+
+The `points_topic` and `imu_topic` **must match the actual topic names in your rosbag**.
+Different bags may use different topic names. Check with:
+
+```bash
+# From host (if rosbags python package installed):
+python3 -c "
+from rosbags.rosbag2 import Reader
+with Reader('/path/to/your_ros2_bag') as r:
+    for c in r.connections:
+        print(f'{c.topic} ({c.msgtype}, {c.msgcount} msgs)')
+"
+
+# Or from inside the container:
+ros2 bag info /home_max/path/to/your_ros2_bag
+```
+
+Update `config_ros.json` to match:
 
 ```json
 "imu_topic": "/livox/imu",
-"points_topic": "/livox/pc2"
+"points_topic": "/livox/lidar"
 ```
 
-### Step 4: Run GLIM mapping
+Common topic names:
+- Livox Mid360: `/livox/lidar` (PointCloud2), `/livox/imu`
+- Converted bags: may use `/livox/pc2` if explicitly converted
+
+#### 2c. `config_external/config_ros.json` -- dump path
+
+Choose where to write output (container path):
+
+```
+/home_max/ground_map/koide3/data/glim_dump
+```
+
+#### Timestamp note
+
+The pose.txt `lidar_ts` column uses **Livox hardware timestamps**, which may differ from
+ROS bag recording time by a large offset. This is expected -- GLIM matches against the
+PointCloud2 `header.stamp` which also uses the Livox hardware clock. No manual offset needed.
+
+### Step 3: Build and run
+
+#### Option A: Non-interactive (single command)
+
+Build the Docker image (first time or after Dockerfile changes), build GLIM inside the
+container, and run `glim_rosbag` -- all in one command:
 
 ```bash
-source /opt/ros/humble/setup.bash
-source /root/ros2_ws/install/setup.bash
+# Build Docker image (skipped if already exists, use --build to force rebuild)
+./scripts/run_glim_custom.sh --build
+
+# Or run everything non-interactively:
+docker rm -f glim 2>/dev/null
+docker run --rm \
+    --net=host --ipc=host --pid=host --gpus all \
+    -e DISPLAY=$DISPLAY \
+    -e ROS_IP=127.0.0.1 \
+    -e NVIDIA_DRIVER_CAPABILITIES=compute,graphics,utility,video,display \
+    -v /tmp/.X11-unix:/tmp/.X11-unix \
+    -v /dev/dri:/dev/dri \
+    -v /home/max/ground_map/koide3/glim_1/:/root/ros2_ws/src/glim \
+    -v /home/max/:/home_max \
+    --name glim \
+    --entrypoint /bin/bash \
+    glim_custom:humble_cuda12.2 \
+    -c 'source /opt/ros/humble/setup.bash && \
+cd /root/ros2_ws && \
+source install/setup.bash && \
+colcon build --packages-select glim --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo 2>&1 && \
+source install/setup.bash && \
+/root/ros2_ws/install/glim_ros/lib/glim_ros/glim_rosbag \
+    /home_max/path/to/your_ros2_bag \
+    --ros-args \
+    -p config_path:=/root/ros2_ws/src/glim/config_external \
+    -p auto_quit:=true \
+    -p dump_path:=/home_max/ground_map/koide3/data/glim_dump'
+```
+
+#### Option B: Interactive
+
+```bash
+# Start interactive shell
+./scripts/run_glim_custom.sh
+
+# Inside container:
+cd /root/ros2_ws
+colcon build --packages-select glim --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
+source install/setup.bash
 
 /root/ros2_ws/install/glim_ros/lib/glim_ros/glim_rosbag \
-  /data/rosbag/hdb_r_long_pc2_ros2 \
-  --ros-args \
-  -p config_path:=/root/ros2_ws/src/glim/config_external \
-  -p auto_quit:=true \
-  -p dump_path:=/data/koide3/data/glim_dump
+    /home_max/path/to/your_ros2_bag \
+    --ros-args \
+    -p config_path:=/root/ros2_ws/src/glim/config_external \
+    -p auto_quit:=true \
+    -p dump_path:=/home_max/ground_map/koide3/data/glim_dump
 ```
 
-### Step 5: View results
+### Step 4: View results
 
 ```bash
-/root/ros2_ws/install/glim_ros/lib/glim_ros/offline_viewer \
-  /data/koide3/data/glim_dump
+./scripts/run_glim_custom.sh offline_viewer /home_max/ground_map/koide3/data/glim_dump
 ```
 
 ## Output
