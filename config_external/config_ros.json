@@ -18,7 +18,7 @@
       "libstandard_viewer.so"
     ],
     "imu_topic": "/livox/imu",
-    "points_topic": "/livox/pc2",
+    "points_topic": "/livox/lidar",
     "image_topic": "/image",
     "imu_qos": {
       "profile": "sensor_data",

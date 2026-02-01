@@ -43,7 +43,7 @@ docker run -it --rm \
     -e NVIDIA_DRIVER_CAPABILITIES=compute,graphics,utility,video,display \
     -v /tmp/.X11-unix:/tmp/.X11-unix \
     -v /dev/dri:/dev/dri \
-    -v /home/max/ground_map/koide3/glim/:/glim/ \
+    -v /home/max/ground_map/koide3/glim_1/:/root/ros2_ws/src/glim \
     -v /home/max/:/home_max \
     --name ${CONTAINER_NAME} \
     ${IMAGE_NAME} ${CMD_ARGS}

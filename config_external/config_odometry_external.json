@@ -1,7 +1,7 @@
 {
   "odometry_estimation": {
     "so_name": "libexternal_odometry_estimation.so",
-    "pose_file_path": "/data/koide3/data/pose.txt",
+    "pose_file_path": "/home_max/ground_map/rosbag/10-jan-2026/hdb_r_long_pose.txt",
     "timestamp_tolerance": 0.1,
     "estimate_velocity": true,
     "velocity_dt": 0.02
