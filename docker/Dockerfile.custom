@@ -1,9 +1,13 @@
 FROM koide3/glim_ros2:humble_cuda12.2
 
-# Install mesa-utils for OpenGL debugging
+# Install mesa-utils and pip for Python packages
 RUN apt-get update && apt-get install -y \
     mesa-utils \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
+
+# Python deps for render_colored_pcd.py and tests
+RUN pip3 install --no-cache-dir rosbags pytest
 
 # Source ROS2 Humble and ros2_ws setup in bashrc
 RUN echo "source /opt/ros/humble/setup.bash" >> /root/.bashrc && \

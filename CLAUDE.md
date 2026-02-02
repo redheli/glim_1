@@ -77,3 +77,50 @@ source install/setup.bash && \
 ### Full Documentation
 
 See `docs/external_odometry.md` for the complete guide including FAST-LIVO2 pose generation, architecture details, and output file descriptions.
+See `docs/render_colored_pcd.md` for the colored point cloud rendering pipeline.
+
+## Running Tests
+
+Python tests **must run inside the Docker container** (host may lack dependencies). Do NOT try to `pip install` on the host.
+
+### Quick command (run all tests):
+```bash
+docker run --rm \
+    --entrypoint /bin/bash \
+    -v /home/max/:/home_max \
+    glim_custom:humble_cuda12.2 \
+    -c "cd /home_max/ground_map/koide3/glim/scripts && python3 -m pytest test_render_colored_pcd.py -v"
+```
+
+### Run a single test class or test:
+```bash
+# Single class
+docker run --rm --entrypoint /bin/bash -v /home/max/:/home_max \
+    glim_custom:humble_cuda12.2 \
+    -c "cd /home_max/ground_map/koide3/glim/scripts && python3 -m pytest test_render_colored_pcd.py::TestFindNearestImageIdx -v"
+
+# Single test
+docker run --rm --entrypoint /bin/bash -v /home/max/:/home_max \
+    glim_custom:humble_cuda12.2 \
+    -c "cd /home_max/ground_map/koide3/glim/scripts && python3 -m pytest test_render_colored_pcd.py::TestFindNearestImageIdx::test_negative_offset_shifts_query -v"
+```
+
+### Test files and what they cover
+
+| Test file | Tests for | Count |
+|-----------|-----------|-------|
+| `scripts/test_render_colored_pcd.py` | `scripts/render_colored_pcd.py` — submap range parsing, timestamp matching with time offset, GLIM data.txt parsing, binary point loading, fisheye rectification maps, PCD write/read roundtrip, projection math (rotation matrix, transforms), end-to-end submap processing with synthetic data | 36 |
+
+### Docker image dependencies
+
+The Docker image `glim_custom:humble_cuda12.2` (built from `docker/Dockerfile.custom`) includes `python3-pip`, `pytest`, and `rosbags`. If you add new Python dependencies:
+
+1. Add them to the `pip3 install` line in `docker/Dockerfile.custom`
+2. Rebuild: `docker build -t glim_custom:humble_cuda12.2 -f docker/Dockerfile.custom docker/`
+
+### When to run tests
+
+Run tests after modifying any of these files:
+- `scripts/render_colored_pcd.py`
+- `scripts/test_render_colored_pcd.py`
+- `docker/Dockerfile.custom` (rebuild image first)
